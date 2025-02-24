@@ -1,0 +1,52 @@
+trigger:
+- main  # Запуск при изменениях в ветке main
+
+pool:
+  name: Default  # Выполнение на локальном агенте
+
+variables:
+  - group: VM_SSH_Keys  # Подключаем группу переменных с приватным ключом
+
+# Stage 1: Deploy storage accounts
+stages:
+- stage: DeployStorage
+  displayName: 'Deploy Two Storage Accounts'
+  jobs:
+  - job: DeployStorage
+    displayName: 'Deploy Storage Template'
+    steps:
+    - task: AzureResourceManagerTemplateDeployment@3
+      inputs:
+        deploymentScope: 'Resource Group'
+        azureResourceManagerConnection: 'MS'
+        subscriptionId: '64b00c47-5417-4004-b87f-1fe9958efc39'
+        action: 'Create Or Update Resource Group'
+        resourceGroupName: 'MS_Home_Assignment_RG'
+        location: 'East US'
+        templateLocation: 'Linked artifact'
+        csmFile: 'storage-template.json'
+        csmParametersFile: 'sa_parameters.json'
+        deploymentMode: 'Incremental'
+
+# Stage 2: Deploy virtual machine with static IP
+- stage: DeployVM
+  displayName: 'Deploy Virtual Machine with Static IP'
+  dependsOn: DeployStorage
+  jobs:
+  - job: DeployVM
+    displayName: 'Deploy VM Template'
+    steps:
+    - task: AzureResourceManagerTemplateDeployment@3
+      inputs:
+        deploymentScope: 'Resource Group'
+        azureResourceManagerConnection: 'MS'
+        subscriptionId: '64b00c47-5417-4004-b87f-1fe9958efc39'
+        action: 'Create Or Update Resource Group'
+        resourceGroupName: 'MS_Home_Assignment_RG'
+        location: 'East US'
+        templateLocation: 'Linked artifact'
+        csmFile: 'vm-template.json'
+        csmParametersFile: 'vm-parameters.json'
+        overrideParameters: |
+          -adminPublicKey "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCtgOClHxiZ/isbYpIsJvd9X7aWZk03KlnUFV20loWCQSIEWuEvB4YCHseLWLDTSW5NzdurMetk+hf5kD0WWalU1b/DVnlJE0rj6zMIf5BSy080LVJQBhvMiXg76508nWZ0bJmSFz4SyHSxpqh2onIqklbzKF588gdjWCoIgdrQr7O0G5GNgTC6GQoYaUYuBY/qa3aOC3ZXuuzG9NUVW5MhKtCKqnbaTrIsQpu0RERMwzT/SZ9oj7JfALSNVOXYUkGY4JcN6EVx3z5lw95ylBqfB6FD4lO3v6rnSikN47BQAQiLZ9528A8x7uxOfOPe0W1mKYK/jm9lKQ8kKAOGUBLJ ygoro@Jenia"
+        deploymentMode: 'Incremental'
