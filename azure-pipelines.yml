@@ -1,9 +1,9 @@
 trigger:
-  - none
-
+  - none   #run manualy
 pool:
   name: Default  # Use local agent
-#stage1
+  
+Stage 1 - Create Two Storage Accounts and Containers, Retrieve Container Names and SAS URLs to Send to the Linux VM Python Script
 stages:
 - stage: DeployStorageStage
   displayName: 'Deploy Two Storage Accounts'
@@ -24,9 +24,9 @@ stages:
         csmFile: 'storage-template.json'
         csmParametersFile: 'sa_parameters.json'
         deploymentMode: 'Incremental'
-        deploymentOutputs: 'armOutputs'
-        # Extract ARM outputs and set them as output variables
-
+        deploymentOutputs: 'armOutputs' 
+        
+    # Extract ARM outputs and set them as output variables
     - task: PowerShell@2
       name: ExtractArmOutputs
       inputs:
@@ -39,7 +39,7 @@ stages:
           $containerAID = $outputs.containerAID.value
           $containerBID = $outputs.containerBID.value
  
-          # Retriving named from ID
+          # Retriving names from IDs
           $storageAccountAName = ($storageAccountAID -split '/')[8]
           $storageAccountBName = ($storageAccountBID -split '/')[8]
           $containerAName = ($containerAID -split '/')[10]
@@ -73,18 +73,18 @@ stages:
             --https-only `
             --output tsv
 
-          # Creating SAS URL
+          # Creating SAS URLs
           $sourceSasUrl = "https://$storageAccountAName.blob.core.windows.net/?$sourceSasToken"
           $destinationSasUrl = "https://$storageAccountBName.blob.core.windows.net/?$destinationSasToken"
 
-          # Passing parameters to later stage (for sending them later to the script)
+          # Passing parameters to later stage (for sending them later to the python script in VMlinux)
           Write-Host "##vso[task.setvariable variable=sourceSasUrl;isOutput=true]$sourceSasUrl"
           Write-Host "##vso[task.setvariable variable=destinationSasUrl;isOutput=true]$destinationSasUrl"
           Write-Host "##vso[task.setvariable variable=sourceContainer;isOutput=true]$containerAName"
           Write-Host "##vso[task.setvariable variable=destinationContainer;isOutput=true]$containerBName"
 
 
-# Stage 2: Deploy virtual machine
+# Stage 2: Deploy virtual Lunux machine
 - stage: DeployVM_Stage
   displayName: 'Deploy Virtual Machine'
   dependsOn: DeployStorageStage
@@ -92,7 +92,7 @@ stages:
   - job: DeployVM_Job
     displayName: 'Deploy VM Template'
     steps:
-    - task: PowerShell@2
+    - task: PowerShell@2  #attempt to read the contents of a Python script in order to in inject it to the vm linux on creation
       name: ReadScriptContent
       inputs:
         targetType: 'inline'
@@ -102,7 +102,7 @@ stages:
           $scriptContent = [System.Text.Encoding]::UTF8.GetBytes($scriptContent) -join ' '
           Write-Host "##vso[task.setvariable variable=scriptContent]$scriptContent"
 
-    - task: AzureResourceManagerTemplateDeployment@3
+    - task: AzureResourceManagerTemplateDeployment@3 #deploy the vm linux from arm
       inputs:
         deploymentScope: 'Resource Group'
         azureResourceManagerConnection: 'MS'
@@ -113,11 +113,11 @@ stages:
         templateLocation: 'Linked artifact'
         csmFile: 'vm-template.json'
         csmParametersFile: 'vm-parameters.json'
-        overrideParameters: >
+        overrideParameters: > #injecting the script to arm #unsuccesfull
           -scriptContent "$(scriptContent)" -adminPublicKey "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDVLZ1y9OHXJxgUCi3LFTWAzcsrqy1OoIYGBuWIV6UJy1MIoWnojjCAU2xemi7S0QE/uefG0oSyrD9Lo8ZPhGO6U08eTW22iuweA7QBDOuWJnwXeLKh3alpKj/oqQRhENQpNTfLD7V/aaAJeZtr42rUks2YfAdqakNdNI4qMJ81NI2Chk1JcV3WJancQQidV7CWgfNvUyw6hliCeAM3zukbGVDRzcfoFJe8gcPzjDdX4Wi7/5AUHTgTGY/V4hqcY5b4GHp0rth/Hh7xQY9hsU7V+EIrDx1CUW+n/C8Vm6WiUq4DlmZxF/4vf72JF3crl7wglXKKQ8g9fh0x6DBbSFawXGweIKz0vJ6tfYZViGM9j3X945goJS8mpHmVtePfaeEALh7PYMo6B4gnXkNNyE0tquJDBLJFjVU+eJ8yAY55NRRXnR8mpXgLb5MxRfbNZIORMsR9SRV/rj65FRjh4xuzO7tK35DmS7v6xIc5OLl0+cW44OpJI3hmq41KgGP2YY7Gd+AhkI6MGZwyj1hL9kPzoIdy7BtilCCIowc17srKLa1qWe3YV8l12ypjav8lEb6xtMFRFHfcIRCR4XRX6z8WmqwX13pdQusKuazcMo51J8FMzsq3eLcv2kxSBw0/rY/wATWIH6q6WyIri0geggYvpeFX0J3reM57a65NVRsDdw== ygoro@Jenia"
         dploymentMode: 'Incremental'
 
-# Stage 3: Prepare VM
+# Stage 3: Prepare VM ,install relevant for python script pachages on Linux VM
 - stage: Server_preparation_stage
   displayName: 'Update Packages on VM'
   dependsOn: DeployVM_Stage
@@ -131,13 +131,6 @@ stages:
         scriptType: 'ps'
         scriptLocation: 'inlineScript'
         inlineScript: |
-          # Update system and install dependencies
-          $vm_ip = az network public-ip show `
-          --resource-group MS_Home_Assignment_RG `
-          --name myPublicIP `
-          --query "ipAddress" `
-          --output tsv
-
           # Update VM Linux packages
           az vm run-command invoke `
           --resource-group MS_Home_Assignment_RG `
@@ -187,10 +180,10 @@ stages:
           Write-Host "Source Container: $sourceContainer"
           Write-Host "Destination Container: $destinationContainer"
 
-          # Copy script to VM using SCP
+          # Copy script to VM using SCP #used as previos cloud init script inject to vm linux didnt work
           scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no upload_and_copy_blob.py azureuser@${vm_ip}:/home/azureuser/
 
-          # Grant execution rights and run the script with Storage Account IDs
+          # Run the script with Storage Account IDs
           az vm run-command invoke `
             --resource-group MS_Home_Assignment_RG `
             --name myLinuxVM `
