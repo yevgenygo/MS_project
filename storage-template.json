@@ -25,7 +25,18 @@
         "name": "Standard_LRS"
       },
       "kind": "StorageV2",
-      "properties": {}
+      "properties": {},
+      "resources": [
+        {
+          "type": "blobServices/containers",
+          "apiVersion": "2021-04-01",
+          "name": "[concat('default/', 'containera')]",
+          "dependsOn": [
+            "[parameters('storageAccountNameA')]"
+          ],
+          "properties": {}
+        }
+      ]
     },
     {
       "type": "Microsoft.Storage/storageAccounts",
@@ -36,7 +47,37 @@
         "name": "Standard_LRS"
       },
       "kind": "StorageV2",
-      "properties": {}
+      "properties": {},
+      "resources": [
+        {
+          "type": "blobServices/containers",
+          "apiVersion": "2021-04-01",
+          "name": "[concat('default/', 'containerb')]",
+          "dependsOn": [
+            "[parameters('storageAccountNameB')]"
+          ],
+          "properties": {}
+        }
+      ]
     }
-  ]
+  ],
+    // output the detail of the storage accounts and contaners to the pipeline
+  "outputs": {
+    "storageAccountAID": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountNameA'))]"
+    },
+    "storageAccountBID": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountNameB'))]"
+    },
+    "containerAID": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountNameA'), 'default', 'containera')]"
+    },
+    "containerBID": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountNameB'), 'default', 'containerb')]"
+    }
+  }
 }
