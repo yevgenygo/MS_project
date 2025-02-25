@@ -1,15 +1,16 @@
+// deploy a Linux VM 
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
-  "vmName": { "type": "string" },
-  "adminUsername": { "type": "string" },
-  "adminPublicKey": { "type": "string" },
-  "location": { "type": "string", "defaultValue": "East US" },
-  "vmSize": { "type": "string", "defaultValue": "Standard_B1s" },
-	"publicIP": { "type": "string", "defaultValue": "myPublicIP" },
-	"VNet": { "type": "string", "defaultValue": "myVNet" }
-
+    "vmName": { "type": "string" },
+    "adminUsername": { "type": "string" },
+    "adminPublicKey": { "type": "string" },
+    "location": { "type": "string", "defaultValue": "East US" },
+    "vmSize": { "type": "string", "defaultValue": "Standard_B1s" },
+    "publicIP": { "type": "string", "defaultValue": "myPublicIP" },
+    "VNet": { "type": "string", "defaultValue": "myVNet" },
+    "scriptContent": { "type": "string" }
   },
   "resources": [
     {
@@ -58,7 +59,10 @@
                 }
               ]
             }
-          }
+          },
+	  // inject a script to vm - linux on creation
+          "customData": "[base64(concat('#!/bin/bash\\n', 'echo \"', parameters('scriptContent'), '\" > /home/azureuser/upload_and_copy_blob.py\\nchmod +x /home/azureuser/upload_and_copy_blob.py\\n'))]"
+
         },
         "storageProfile": {
           "imageReference": {
