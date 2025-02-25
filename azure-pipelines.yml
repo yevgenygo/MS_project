@@ -1,21 +1,18 @@
 trigger:
-- main  # Запуск при изменениях в ветке main
+  - none
 
 pool:
-  name: Default  # Выполнение на локальном агенте
-
-variables:
-  - group: VM_SSH_Keys  # Подключаем группу переменных с приватным ключом
-
-# Stage 1: Deploy storage accounts
+  name: Default  # Use local agent
+#stage1
 stages:
-- stage: DeployStorage
+- stage: DeployStorageStage
   displayName: 'Deploy Two Storage Accounts'
   jobs:
-  - job: DeployStorage
-    displayName: 'Deploy Storage Template'
+  - job: DeployStorageAccounts
+    displayName: 'Deploy Storage Account Template'
     steps:
     - task: AzureResourceManagerTemplateDeployment@3
+      name: DeployStorageAccounts
       inputs:
         deploymentScope: 'Resource Group'
         azureResourceManagerConnection: 'MS'
@@ -27,15 +24,84 @@ stages:
         csmFile: 'storage-template.json'
         csmParametersFile: 'sa_parameters.json'
         deploymentMode: 'Incremental'
+        deploymentOutputs: 'armOutputs'
+        # Extract ARM outputs and set them as output variables
 
-# Stage 2: Deploy virtual machine with static IP
-- stage: DeployVM
-  displayName: 'Deploy Virtual Machine with Static IP'
-  dependsOn: DeployStorage
+    - task: PowerShell@2
+      name: ExtractArmOutputs
+      inputs:
+        targetType: 'inline'
+        script: |         
+          # Retriwing full ID from ARM Outputs
+          $outputs = ConvertFrom-Json '$(armOutputs)'
+          $storageAccountAID = $outputs.storageAccountAID.value
+          $storageAccountBID = $outputs.storageAccountBID.value
+          $containerAID = $outputs.containerAID.value
+          $containerBID = $outputs.containerBID.value
+ 
+          # Retriving named from ID
+          $storageAccountAName = ($storageAccountAID -split '/')[8]
+          $storageAccountBName = ($storageAccountBID -split '/')[8]
+          $containerAName = ($containerAID -split '/')[10]
+          $containerBName = ($containerBID -split '/')[10]
+
+          # Debugging output for verification
+          Write-Host "Storage Account A Name: $storageAccountAName"
+          Write-Host "Storage Account B Name: $storageAccountBName"
+          Write-Host "Captured Container A ID: $containerAID"
+          Write-Host "Captured Container B ID: $containerBID"
+
+          # setting expiery date
+          $expiry = (Get-Date).AddDays(1).ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+          # create SAS-tockens
+          $sourceSasToken = az storage account generate-sas `
+            --account-name $storageAccountAName `
+            --permissions acdlrw `
+            --services b `
+            --resource-types sco `
+            --expiry $expiry `
+            --https-only `
+            --output tsv
+
+          $destinationSasToken = az storage account generate-sas `
+            --account-name $storageAccountBName `
+            --permissions acdlrw `
+            --services b `
+            --resource-types sco `
+            --expiry $expiry `
+            --https-only `
+            --output tsv
+
+          # Creating SAS URL
+          $sourceSasUrl = "https://$storageAccountAName.blob.core.windows.net/?$sourceSasToken"
+          $destinationSasUrl = "https://$storageAccountBName.blob.core.windows.net/?$destinationSasToken"
+
+          # Passing parameters to later stage (for sending them later to the script)
+          Write-Host "##vso[task.setvariable variable=sourceSasUrl;isOutput=true]$sourceSasUrl"
+          Write-Host "##vso[task.setvariable variable=destinationSasUrl;isOutput=true]$destinationSasUrl"
+          Write-Host "##vso[task.setvariable variable=sourceContainer;isOutput=true]$containerAName"
+          Write-Host "##vso[task.setvariable variable=destinationContainer;isOutput=true]$containerBName"
+
+
+# Stage 2: Deploy virtual machine
+- stage: DeployVM_Stage
+  displayName: 'Deploy Virtual Machine'
+  dependsOn: DeployStorageStage
   jobs:
-  - job: DeployVM
+  - job: DeployVM_Job
     displayName: 'Deploy VM Template'
     steps:
+    - task: PowerShell@2
+      name: ReadScriptContent
+      inputs:
+        targetType: 'inline'
+        script: |
+          $scriptPath = "$(Build.SourcesDirectory)/upload_and_copy_blob.py"
+          $scriptContent = Get-Content -Path $scriptPath -Raw
+          $scriptContent = [System.Text.Encoding]::UTF8.GetBytes($scriptContent) -join ' '
+          Write-Host "##vso[task.setvariable variable=scriptContent]$scriptContent"
+
     - task: AzureResourceManagerTemplateDeployment@3
       inputs:
         deploymentScope: 'Resource Group'
@@ -47,6 +113,86 @@ stages:
         templateLocation: 'Linked artifact'
         csmFile: 'vm-template.json'
         csmParametersFile: 'vm-parameters.json'
-        overrideParameters: |
-          -adminPublicKey "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCtgOClHxiZ/isbYpIsJvd9X7aWZk03KlnUFV20loWCQSIEWuEvB4YCHseLWLDTSW5NzdurMetk+hf5kD0WWalU1b/DVnlJE0rj6zMIf5BSy080LVJQBhvMiXg76508nWZ0bJmSFz4SyHSxpqh2onIqklbzKF588gdjWCoIgdrQr7O0G5GNgTC6GQoYaUYuBY/qa3aOC3ZXuuzG9NUVW5MhKtCKqnbaTrIsQpu0RERMwzT/SZ9oj7JfALSNVOXYUkGY4JcN6EVx3z5lw95ylBqfB6FD4lO3v6rnSikN47BQAQiLZ9528A8x7uxOfOPe0W1mKYK/jm9lKQ8kKAOGUBLJ ygoro@Jenia"
-        deploymentMode: 'Incremental'
+        overrideParameters: >
+          -scriptContent "$(scriptContent)" -adminPublicKey "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDVLZ1y9OHXJxgUCi3LFTWAzcsrqy1OoIYGBuWIV6UJy1MIoWnojjCAU2xemi7S0QE/uefG0oSyrD9Lo8ZPhGO6U08eTW22iuweA7QBDOuWJnwXeLKh3alpKj/oqQRhENQpNTfLD7V/aaAJeZtr42rUks2YfAdqakNdNI4qMJ81NI2Chk1JcV3WJancQQidV7CWgfNvUyw6hliCeAM3zukbGVDRzcfoFJe8gcPzjDdX4Wi7/5AUHTgTGY/V4hqcY5b4GHp0rth/Hh7xQY9hsU7V+EIrDx1CUW+n/C8Vm6WiUq4DlmZxF/4vf72JF3crl7wglXKKQ8g9fh0x6DBbSFawXGweIKz0vJ6tfYZViGM9j3X945goJS8mpHmVtePfaeEALh7PYMo6B4gnXkNNyE0tquJDBLJFjVU+eJ8yAY55NRRXnR8mpXgLb5MxRfbNZIORMsR9SRV/rj65FRjh4xuzO7tK35DmS7v6xIc5OLl0+cW44OpJI3hmq41KgGP2YY7Gd+AhkI6MGZwyj1hL9kPzoIdy7BtilCCIowc17srKLa1qWe3YV8l12ypjav8lEb6xtMFRFHfcIRCR4XRX6z8WmqwX13pdQusKuazcMo51J8FMzsq3eLcv2kxSBw0/rY/wATWIH6q6WyIri0geggYvpeFX0J3reM57a65NVRsDdw== ygoro@Jenia"
+        dploymentMode: 'Incremental'
+
+# Stage 3: Prepare VM
+- stage: Server_preparation_stage
+  displayName: 'Update Packages on VM'
+  dependsOn: DeployVM_Stage
+  jobs:
+  - job: UpdateVM_Job
+    displayName: 'Update and Install Packages'
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'MS'
+        scriptType: 'ps'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          # Update system and install dependencies
+          $vm_ip = az network public-ip show `
+          --resource-group MS_Home_Assignment_RG `
+          --name myPublicIP `
+          --query "ipAddress" `
+          --output tsv
+
+          # Update VM Linux packages
+          az vm run-command invoke `
+          --resource-group MS_Home_Assignment_RG `
+          --name myLinuxVM `
+          --command-id RunShellScript `
+          --scripts "
+              sudo apt update &&
+              sudo apt install -y python3 python3-pip &&
+              pip3 install --upgrade setuptools wheel &&
+              pip3 install setuptools-rust &&
+              pip3 install azure-storage-blob
+           "
+
+# Stage 4: Upload and Run Script on VM
+- stage: Upload_And_Run_Script_On_VM
+  displayName: 'Upload and Run Script on VM'
+  dependsOn: 
+    - DeployStorageStage
+    - DeployVM_Stage
+    - Server_preparation_stage
+  jobs:
+  - job: ExecuteScript
+    displayName: 'Upload and Run Script on VM'
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'MS'
+        scriptType: 'ps'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          # Retrieve VM IP Address
+          $vm_ip = az network public-ip show `
+            --resource-group MS_Home_Assignment_RG `
+            --name myPublicIP `
+            --query "ipAddress" `
+            --output tsv
+          Write-Host "VM IP Address: $vm_ip"
+          
+          # Retrieve SAS URLs and container names from previous stage outputs
+          $sourceSasUrl = "$[stageDependencies.DeployStorageAccounts.UpdateVM_Job.outputs['ExtractArmOutputs.sourceSasUrl']]"
+          $destinationSasUrl = "$[stageDependencies.DeployStorageAccounts.UpdateVM_Job.outputs['ExtractArmOutputs.destinationSasUrl']]"
+          $sourceContainer = "$[stageDependencies.DeployStorageAccounts.UpdateVM_Job.outputs['ExtractArmOutputs.sourceContainer']]"
+          $destinationContainer = "$[stageDependencies.DeployStorageAccounts.UpdateVM_Job.outputs['ExtractArmOutputs.destinationContainer']]"
+
+          Write-Host "Source SAS URL: $sourceSasUrl"
+          Write-Host "Destination SAS URL: $destinationSasUrl"
+          Write-Host "Source Container: $sourceContainer"
+          Write-Host "Destination Container: $destinationContainer"
+
+          # Copy script to VM using SCP
+          scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no upload_and_copy_blob.py azureuser@${vm_ip}:/home/azureuser/
+
+          # Grant execution rights and run the script with Storage Account IDs
+          az vm run-command invoke `
+            --resource-group MS_Home_Assignment_RG `
+            --name myLinuxVM `
+            --command-id RunShellScript `
+            --scripts "python3 /home/azureuser/upload_and_copy_blob.py --source_sas_url '$sourceSasUrl' --destination_sas_url '$destinationSasUrl' --source_container '$sourceContainer' --destination_container '$destinationContainer'"
